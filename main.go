@@ -13,26 +13,28 @@ import (
 	"github.com/go-chi/chi"
 	"github.com/go-chi/chi/middleware"
 	"github.com/thedevsaddam/renderer"
-	mgo "gopkg.in/mgo.v2"
-	"gopkg.in/mgo.v2/bson"
+	"go.mongodb.org/mongo-driver/bson"
+	"go.mongodb.org/mongo-driver/bson/primitive"
+	"go.mongodb.org/mongo-driver/mongo"
+	"go.mongodb.org/mongo-driver/mongo/options"
 )
 
 var rnd *renderer.Render
-var db *mgo.Database
+var db *mongo.Database
 
 const (
-	hostName       string = "localhost:27017"
-	dbName         string = "demo_todo"
+	hostName       string = "mongodb://localhost:27017"
+	dbName         string = "todo_mongo"
 	collectionName string = "todo"
 	port           string = ":9000"
 )
 
 type (
 	todoModel struct {
-		ID        bson.ObjectId `bson:"_id,omitempty"`
-		Title     string        `bson:"title"`
-		Completed bool          `bson:"completed"`
-		CreatedAt time.Time     `bson:"createAt"`
+		ID        primitive.ObjectID `bson:"_id,omitempty"`
+		Title     string             `bson:"title"`
+		Completed bool               `bson:"completed"`
+		CreatedAt time.Time          `bson:"createdAt"`
 	}
 
 	todo struct {
@@ -45,10 +47,9 @@ type (
 
 func init() {
 	rnd = renderer.New()
-	sess, err := mgo.Dial(hostName)
+	client, err := mongo.Connect(context.Background(), options.Client().ApplyURI(hostName))
 	checkErr(err)
-	sess.SetMode(mgo.Monotonic, true)
-	db = sess.DB(dbName)
+	db = client.Database(dbName)
 }
 
 func homeHandler(w http.ResponseWriter, r *http.Request) {
@@ -74,12 +75,13 @@ func createTodo(w http.ResponseWriter, r *http.Request) {
 
 	// if input is okay, create a todo
 	tm := todoModel{
-		ID:        bson.NewObjectId(),
+		ID:        primitive.NewObjectID(),
 		Title:     t.Title,
 		Completed: false,
 		CreatedAt: time.Now(),
 	}
-	if err := db.C(collectionName).Insert(&tm); err != nil {
+	_, err := db.Collection(collectionName).InsertOne(context.Background(), tm)
+	if err != nil {
 		rnd.JSON(w, http.StatusProcessing, renderer.M{
 			"message": "Failed to save todo",
 			"error":   err,
@@ -96,7 +98,8 @@ func createTodo(w http.ResponseWriter, r *http.Request) {
 func updateTodo(w http.ResponseWriter, r *http.Request) {
 	id := strings.TrimSpace(chi.URLParam(r, "id"))
 
-	if !bson.IsObjectIdHex(id) {
+	objID, err := primitive.ObjectIDFromHex(id)
+	if err != nil {
 		rnd.JSON(w, http.StatusBadRequest, renderer.M{
 			"message": "The id is invalid",
 		})
@@ -119,11 +122,12 @@ func updateTodo(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// if input is okay, update a todo
-	if err := db.C(collectionName).
-		Update(
-			bson.M{"_id": bson.ObjectIdHex(id)},
-			bson.M{"title": t.Title, "completed": t.Completed},
-		); err != nil {
+	_, err = db.Collection(collectionName).UpdateOne(
+		context.Background(),
+		bson.M{"_id": objID},
+		bson.M{"$set": bson.M{"title": t.Title, "completed": t.Completed}},
+	)
+	if err != nil {
 		rnd.JSON(w, http.StatusProcessing, renderer.M{
 			"message": "Failed to update todo",
 			"error":   err,
@@ -137,11 +141,19 @@ func updateTodo(w http.ResponseWriter, r *http.Request) {
 }
 
 func fetchTodos(w http.ResponseWriter, r *http.Request) {
-	todos := []todoModel{}
+	var todos []todoModel
 
-	if err := db.C(collectionName).
-		Find(bson.M{}).
-		All(&todos); err != nil {
+	cursor, err := db.Collection(collectionName).Find(context.Background(), bson.M{})
+	if err != nil {
+		rnd.JSON(w, http.StatusProcessing, renderer.M{
+			"message": "Failed to fetch todo",
+			"error":   err,
+		})
+		return
+	}
+	defer cursor.Close(context.Background())
+
+	if err = cursor.All(context.Background(), &todos); err != nil {
 		rnd.JSON(w, http.StatusProcessing, renderer.M{
 			"message": "Failed to fetch todo",
 			"error":   err,
@@ -167,14 +179,16 @@ func fetchTodos(w http.ResponseWriter, r *http.Request) {
 func deleteTodo(w http.ResponseWriter, r *http.Request) {
 	id := strings.TrimSpace(chi.URLParam(r, "id"))
 
-	if !bson.IsObjectIdHex(id) {
+	objID, err := primitive.ObjectIDFromHex(id)
+	if err != nil {
 		rnd.JSON(w, http.StatusBadRequest, renderer.M{
 			"message": "The id is invalid",
 		})
 		return
 	}
 
-	if err := db.C(collectionName).RemoveId(bson.ObjectIdHex(id)); err != nil {
+	_, err = db.Collection(collectionName).DeleteOne(context.Background(), bson.M{"_id": objID})
+	if err != nil {
 		rnd.JSON(w, http.StatusProcessing, renderer.M{
 			"message": "Failed to delete todo",
 			"error":   err,
