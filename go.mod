@@ -1,6 +1,6 @@
-module github.com/akhilsharma/todo
+module github.com/amirata051/todo-list
 
-go 1.24.6
+go 1.21
 
 require (
 	github.com/go-chi/chi v1.5.5
